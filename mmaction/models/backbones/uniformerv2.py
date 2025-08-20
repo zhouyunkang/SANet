@@ -83,7 +83,7 @@ class Adapter(nn.Module):
         else:
             x = xs
         return x
-class Adapter1(nn.Module):
+class SpatialRechannelAdapter(nn.Module):
     def __init__(self, D_features, mlp_ratio_init=0.25, act_layer=nn.GELU, skip_connect=True):
         super().__init__()
         self.skip_connect = skip_connect
@@ -220,7 +220,7 @@ class ResidualAttentionBlock(BaseModule):
         self.ln_2 = nn.LayerNorm(d_model)
 
         self.MLP_Adapter = Adapter(d_model,skip_connect=False)
-        self.S_Adapter = Adapter1(d_model)
+        self.S_Adapter = SpatialRechannelAdapter(d_model)
         self.T_CrossAdapter=TokenreweightingAdapter(d_model)
     def attention(self, x: torch.Tensor) -> torch.Tensor:
 
