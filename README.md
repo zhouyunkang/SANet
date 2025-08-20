@@ -1,6 +1,7 @@
 # SANet
 ## Installation 
-We express our respect for their outstanding work. To prepare the environment, please follow the following instructions.\n
+We express our respect for their outstanding work. To prepare the environment, please follow the following instructions.
+
 <code>conda create --name openmmlab python=3.8 -y</code>
 conda activate openmmlab
 conda install pytorch torchvision -c pytorch  # This command will automatically install the latest version PyTorch and cudatoolkit, please check whether they match your environment.
