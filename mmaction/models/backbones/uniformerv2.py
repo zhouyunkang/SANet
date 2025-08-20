@@ -61,7 +61,6 @@ class TokenreweightingAdapter(nn.Module):
         out = self.out_proj(x*weights)
         return out
 
-# ---------------------------- Mona 模块 ----------------------------
 class Adapter(nn.Module):
     def __init__(self, D_features, mlp_ratio=0.25, act_layer=nn.GELU, skip_connect=True):
         super().__init__()
@@ -164,7 +163,7 @@ class Local_MHRA(BaseModule):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.pos_embed(x)
-        return x  # self.conv3d(x)
+        return x  
 
 
 class ResidualAttentionBlock(BaseModule):
@@ -586,8 +585,6 @@ class UniFormerV2(BaseModule):
     ) -> None:
         super().__init__(init_cfg=init_cfg)
         self.frozen_stages = frozen_stages
-
-        # self.mona = Mona(in_dim=width, factor=8)
         self.pretrained = pretrained
         self.clip_pretrained = clip_pretrained
         self.input_resolution = input_resolution
