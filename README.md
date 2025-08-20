@@ -3,7 +3,7 @@
 We express our respect for their outstanding work. To prepare the environment, please follow the following instructions.<br>
 <code>conda create --name openmmlab python=3.8 -y</code><br>
 <code>conda activate openmmlab</code><br>
-<code>conda install pytorch torchvision -c pytorch</code> <br> # This command will automatically install the latest version PyTorch and cudatoolkit, please check whether they match your environment.<br>
+<code>conda install pytorch torchvision -c pytorch</code> <br> This command will automatically install the latest version PyTorch and cudatoolkit, please check whether they match your environment.<br>
 <code>pip install -U openmim</code><br>
 <code>mim install mmengine</code><br>
 <code>mim install mmcv</code><br>
