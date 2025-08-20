@@ -14,7 +14,7 @@ We express our respect for their outstanding work. To prepare the environment, p
 ## Datasets
 The used datasets are provided in [VideoEmotion-8](https://drive.google.com/drive/folders/0B5peJ1MHnIWGd3pFbzMyTG5BSGs?resourcekey=0-hZ1jo5t1hIauRpYhYIvWYA) and [Ekman-6](https://github.com/kittenish/Frame-Transformer-Network). The train/test splits in both two datasets follow the official procedure. To prepare the data, you can refer to VideoMAE V2 for a general guideline.
 ## Model
-We now provide the model weights in the following [link](https://pan.baidu.com/s/1LjO4nqA0z4qMD-CvVtjAsw?pwd=CHOW).
+We now provide the model weights in the following [link]([https://pan.baidu.com/s/1LjO4nqA0z4qMD-CvVtjAsw?pwd=CHOW](https://download.openmmlab.com/mmaction/v1.0/recognition/uniformerv2/uniformerv2-base-p16-res224_clip-pre_u8_kinetics710-rgb/uniformerv2-base-p16-res224_clip-pre_u8_kinetics710-rgb_20230612-63cdbad9.pth)).
 ## Train
 The model can be trained with the following command.<br>
 <code>export CUBLAS_WORKSPACE_CONFIG=":4096:8"</code><br>
