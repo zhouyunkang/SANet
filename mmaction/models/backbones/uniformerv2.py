@@ -1,33 +1,113 @@
-# Copyright (c) OpenMMLab. All rights reserved.
+﻿# Copyright (c) OpenMMLab. All rights reserved.
 import os
 from collections import OrderedDict
 from typing import Dict, List, Optional, Union
-
+from einops import rearrange
+from einops.array_api import rearrange
+from torch.nn.init import trunc_normal_
+import math
+from einops import rearrange
+from torch import nn
 import torch
 from mmcv.cnn.bricks import DropPath
+from mmcv.cnn.bricks.drop import drop_path
 from mmengine.logging import MMLogger
 from mmengine.model import BaseModule, ModuleList
 from mmengine.runner.checkpoint import _load_checkpoint
 from torch import nn
-
+import torch.nn.functional as F
 from mmaction.registry import MODELS
+import torch
+import torch.nn as nn
+from einops import repeat
 
 logger = MMLogger.get_current_instance()
 
 MODEL_PATH = 'https://download.openmmlab.com/mmaction/v1.0/recognition'
 _MODELS = {
     'ViT-B/16':
-    os.path.join(MODEL_PATH, 'uniformerv2/clipVisualEncoder',
-                 'vit-base-p16-res224_clip-rgb_20221219-b8a5da86.pth'),
+        os.path.join(MODEL_PATH, 'uniformerv2/clipVisualEncoder',
+                     'vit-base-p16-res224_clip-rgb_20221219-b8a5da86.pth'),
     'ViT-L/14':
-    os.path.join(MODEL_PATH, 'uniformerv2/clipVisualEncoder',
-                 'vit-large-p14-res224_clip-rgb_20221219-9de7543e.pth'),
+        os.path.join(MODEL_PATH, 'uniformerv2/clipVisualEncoder',
+                     'vit-large-p14-res224_clip-rgb_20221219-9de7543e.pth'),
     'ViT-L/14_336':
-    os.path.join(MODEL_PATH, 'uniformerv2/clipVisualEncoder',
-                 'vit-large-p14-res336_clip-rgb_20221219-d370f9e5.pth'),
+        os.path.join(MODEL_PATH, 'uniformerv2/clipVisualEncoder',
+                     'vit-large-p14-res336_clip-rgb_20221219-d370f9e5.pth'),
 }
 
+import torch.nn as nn
+import torch.nn.functional as F
+import torch
+from mmdet.models.backbones.swin import ShiftWindowMSA
 
+from mmcv.cnn import build_norm_layer
+from mmcv.cnn.bricks.transformer import FFN
+from mmengine.model import BaseModule
+class TokenreweightingAdapter(nn.Module):
+    def __init__(self, D):
+        super().__init__()
+        self.norm = nn.LayerNorm(D)
+        self.score = nn.Sequential(nn.Linear(D,D//2),nn.GELU(),nn.Linear(D//2,1))
+        self.out_proj = nn.Linear(D, D)
+        nn.init.constant_(self.out_proj.weight, 0)
+        nn.init.constant_(self.out_proj.bias, 0)
+
+    def forward(self, x):
+        # x: (BT, N, D)
+        normed = self.norm(x)
+        scores = self.score(normed)
+        weights = torch.sigmoid(scores)
+        out = self.out_proj(x*weights)
+        return out
+
+# ---------------------------- Mona 模块 ----------------------------
+class Adapter(nn.Module):
+    def __init__(self, D_features, mlp_ratio=0.25, act_layer=nn.GELU, skip_connect=True):
+        super().__init__()
+        self.skip_connect = skip_connect
+        D_hidden_features = int(D_features * mlp_ratio)
+        self.act = act_layer()
+        self.D_fc1 = nn.Linear(D_features, D_hidden_features)
+        self.D_fc2 = nn.Linear(D_hidden_features, D_features)
+        nn.init.constant_(self.D_fc2.weight, 0)
+        nn.init.constant_(self.D_fc2.bias, 0)
+
+    def forward(self, x):
+        # x is (BT, HW+1, D)
+        xs = self.D_fc1(x)
+        xs = self.act(xs)
+        xs = self.D_fc2(xs)
+        if self.skip_connect:
+            x = x + xs
+        else:
+            x = xs
+        return x
+class Adapter1(nn.Module):
+    def __init__(self, D_features, mlp_ratio_init=0.25, act_layer=nn.GELU, skip_connect=True):
+        super().__init__()
+        self.skip_connect = skip_connect
+        init_logit = torch.logit(torch.tensor(mlp_ratio_init,dtype=torch.float32))
+        self.logit_ratio = nn.Parameter(init_logit.unsqueeze(0))
+        self.D_hidden_max = D_features
+        self.D_fc1 = nn.Linear(D_features, self.D_hidden_max)
+        self.act = act_layer()
+        self.D_fc2 = nn.Linear(self.D_hidden_max, D_features)
+        nn.init.constant_(self.D_fc2.weight, 0)
+        nn.init.constant_(self.D_fc2.bias, 0)
+
+    def forward(self, x):
+        # x is (BT, HW+1, D)
+        r = torch.sigmoid(self.logit_ratio)
+        xs = self.D_fc1(x)
+        xs = self.act(xs)
+        h_scaled = xs*r
+        out = self.D_fc2(h_scaled)
+        if self.skip_connect:
+            x = x + out
+        else:
+            x = out
+        return x
 class QuickGELU(BaseModule):
     """Quick GELU function. Forked from https://github.com/openai/CLIP/blob/d50
     d76daa670286dd6cacf3bcd80b5e4823fc8e1/clip/model.py.
@@ -54,14 +134,14 @@ class Local_MHRA(BaseModule):
     """
 
     def __init__(
-        self,
-        d_model: int,
-        dw_reduction: float = 1.5,
-        pos_kernel_size: int = 3,
-        init_cfg: Optional[dict] = None,
+            self,
+            d_model: int,
+            dw_reduction: float = 1.5,
+            pos_kernel_size: int = 3,
+            init_cfg: Optional[dict] = None,
     ) -> None:
         super().__init__(init_cfg=init_cfg)
-
+        # self.conv3d = nn.Conv3d(d_model,d_model,kernel_size=(3,1,1),stride=(1,1,1),padding=(1,0,0))
         padding = pos_kernel_size // 2
         re_d_model = int(d_model // dw_reduction)
         self.pos_embed = nn.Sequential(
@@ -83,7 +163,8 @@ class Local_MHRA(BaseModule):
         nn.init.constant_(self.pos_embed[3].bias, 0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.pos_embed(x)
+        x = self.pos_embed(x)
+        return x  # self.conv3d(x)
 
 
 class ResidualAttentionBlock(BaseModule):
@@ -105,17 +186,16 @@ class ResidualAttentionBlock(BaseModule):
     """
 
     def __init__(
-        self,
-        d_model: int,
-        n_head: int,
-        drop_path: float = 0.0,
-        dw_reduction: float = 1.5,
-        no_lmhra: bool = False,
-        double_lmhra: bool = True,
-        init_cfg: Optional[dict] = None,
+            self,
+            d_model: int,
+            n_head: int,
+            drop_path: float = 0.0,
+            dw_reduction: float = 1.5,
+            no_lmhra: bool = False,
+            double_lmhra: bool = True,
+            init_cfg: Optional[dict] = None,
     ) -> None:
         super().__init__(init_cfg=init_cfg)
-
         self.n_head = n_head
         self.drop_path = DropPath(
             drop_path) if drop_path > 0. else nn.Identity()
@@ -139,7 +219,12 @@ class ResidualAttentionBlock(BaseModule):
                          ('c_proj', nn.Linear(d_model * 4, d_model))]))
         self.ln_2 = nn.LayerNorm(d_model)
 
+        self.MLP_Adapter = Adapter(d_model,skip_connect=False)
+        self.S_Adapter = Adapter1(d_model)
+        self.T_CrossAdapter=TokenreweightingAdapter(d_model)
     def attention(self, x: torch.Tensor) -> torch.Tensor:
+
+
         return self.attn(x, x, x, need_weights=False, attn_mask=None)[0]
 
     def forward(self, x: torch.Tensor, T: int = 8) -> torch.Tensor:
@@ -149,7 +234,7 @@ class ResidualAttentionBlock(BaseModule):
             tmp_x = x[1:, :, :]
             L, NT, C = tmp_x.shape
             N = NT // T
-            H = W = int(L**0.5)
+            H = W = int(L ** 0.5)
             tmp_x = tmp_x.view(H, W, N, T, C).permute(2, 4, 3, 0,
                                                       1).contiguous()
             tmp_x = tmp_x + self.drop_path(self.lmhra1(tmp_x))
@@ -158,19 +243,36 @@ class ResidualAttentionBlock(BaseModule):
                                           1).contiguous().view(L, NT, C)
             x = torch.cat([x[:1, :, :], tmp_x], dim=0)
         # MHSA
-        x = x + self.drop_path(self.attention(self.ln_1(x)))
+
+        n, bt, d = x.shape
+
+        # ## temporal adaptation
+        xt = rearrange(x, 'n (b t) d -> t (b n) d', t=T)
+        xt_ln = self.ln_1(xt)
+        xt_attn = self.attention(xt_ln)
+        xt =self.T_CrossAdapter(xt_attn)
+        xt = rearrange(xt, 't (b n) d -> n (b t) d', n=n)
+        x = x + self.drop_path(xt)
+        ## spatial adaptation
+        attn_out = self.attention(self.ln_1(x))  # 原始 attention 输
+        x = x + self.drop_path(self.S_Adapter(attn_out))  # 残差融合
+
         # Local MHRA
         if not self.no_lmhra and self.double_lmhra:
             tmp_x = x[1:, :, :]
             tmp_x = tmp_x.view(H, W, N, T, C).permute(2, 4, 3, 0,
                                                       1).contiguous()
             tmp_x = tmp_x + self.drop_path(self.lmhra2(tmp_x))
+
             tmp_x = tmp_x.view(N, C, T,
                                L).permute(3, 0, 2,
                                           1).contiguous().view(L, NT, C)
             x = torch.cat([x[:1, :, :], tmp_x], dim=0)
+
         # FFN
-        x = x + self.drop_path(self.mlp(self.ln_2(x)))
+        xn = self.ln_2(x)
+        x = x + self.drop_path(self.mlp(xn)+self.MLP_Adapter(xn))
+
         return x
 
 
@@ -191,16 +293,15 @@ class Extractor(BaseModule):
     """
 
     def __init__(
-        self,
-        d_model: int,
-        n_head: int,
-        mlp_factor: float = 4.0,
-        dropout: float = 0.0,
-        drop_path: float = 0.0,
-        init_cfg: Optional[dict] = None,
+            self,
+            d_model: int,
+            n_head: int,
+            mlp_factor: float = 4.0,
+            dropout: float = 0.0,
+            drop_path: float = 0.0,
+            init_cfg: Optional[dict] = None,
     ) -> None:
         super().__init__(init_cfg=init_cfg)
-
         self.drop_path = DropPath(
             drop_path) if drop_path > 0. else nn.Identity()
         logger.info(f'Drop path rate: {drop_path}')
@@ -239,7 +340,7 @@ class Extractor(BaseModule):
                    self.attn.head_dim).permute(1, 2, 0, 3)
         v = v.view(Ty, N, self.attn.num_heads,
                    self.attn.head_dim).permute(1, 2, 0, 3)
-        aff = (q @ k.transpose(-2, -1) / (self.attn.head_dim**0.5))
+        aff = (q @ k.transpose(-2, -1) / (self.attn.head_dim ** 0.5))
 
         aff = aff.softmax(dim=-1)
         out = aff @ v
@@ -250,6 +351,7 @@ class Extractor(BaseModule):
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         x = x + self.drop_path(self.attention(self.ln_1(x), self.ln_3(y)))
         x = x + self.drop_path(self.mlp(self.ln_2(x)))
+
         return x
 
 
@@ -268,7 +370,7 @@ class Transformer(BaseModule):
             Defaults to 1.5.
         no_lmhra (bool): Whether removing local MHRA in local UniBlock.
             Defaults to False.
-        double_lmhra (bool): Whether using double local MHRA
+        double_lmhra (bool): Whether using double local MHRAhuail
             in local UniBlock. Defaults to True.
         return_list (List[int]): Layer index of input features
             for global UniBlock. Defaults to [8, 9, 10, 11].
@@ -291,23 +393,23 @@ class Transformer(BaseModule):
     """
 
     def __init__(
-        self,
-        width: int,
-        layers: int,
-        heads: int,
-        backbone_drop_path_rate: float = 0.,
-        t_size: int = 8,
-        dw_reduction: float = 1.5,
-        no_lmhra: bool = True,
-        double_lmhra: bool = False,
-        return_list: List[int] = [8, 9, 10, 11],
-        n_layers: int = 4,
-        n_dim: int = 768,
-        n_head: int = 12,
-        mlp_factor: float = 4.0,
-        drop_path_rate: float = 0.,
-        mlp_dropout: List[float] = [0.5, 0.5, 0.5, 0.5],
-        init_cfg: Optional[dict] = None,
+            self,
+            width: int,
+            layers: int,
+            heads: int,
+            backbone_drop_path_rate: float = 0.,
+            t_size: int = 8,
+            dw_reduction: float = 1.5,
+            no_lmhra: bool = True,
+            double_lmhra: bool = False,
+            return_list: List[int] = [8, 9, 10, 11],
+            n_layers: int = 4,
+            n_dim: int = 768,
+            n_head: int = 12,
+            mlp_factor: float = 4.0,
+            drop_path_rate: float = 0.,
+            mlp_dropout: List[float] = [0.5, 0.5, 0.5, 0.5],
+            init_cfg: Optional[dict] = None,
     ) -> None:
         super().__init__(init_cfg=init_cfg)
 
@@ -363,12 +465,12 @@ class Transformer(BaseModule):
         T_down = self.T
         L, NT, C = x.shape
         N = NT // T_down
-        H = W = int((L - 1)**0.5)
+        H = W = int((L - 1) ** 0.5)
         cls_token = self.temporal_cls_token.repeat(1, N, 1)
 
         j = -1
         for i, resblock in enumerate(self.resblocks):
-            x = resblock(x, T_down)
+            x = resblock(x, T_down)  # 197,16,768
             if i in self.return_list:
                 j += 1
                 tmp_x = x.clone()
@@ -380,7 +482,8 @@ class Transformer(BaseModule):
                 tmp_feats = self.dpe[j](tmp_feats.clone()).view(
                     N, C, T_down, L - 1).permute(3, 0, 2, 1).contiguous()
                 tmp_x[1:] = tmp_x[1:] + tmp_feats
-                # global block
+                global block
+
                 tmp_x = tmp_x.permute(2, 0, 1, 3).flatten(0, 1)  # T * L, N, C
                 cls_token = self.dec[j](cls_token, tmp_x)
 
@@ -449,38 +552,42 @@ class UniFormerV2(BaseModule):
     """
 
     def __init__(
-        self,
-        # backbone
-        input_resolution: int = 224,
-        patch_size: int = 16,
-        width: int = 768,
-        layers: int = 12,
-        heads: int = 12,
-        backbone_drop_path_rate: float = 0.,
-        t_size: int = 8,
-        kernel_size: int = 3,
-        dw_reduction: float = 1.5,
-        temporal_downsample: bool = False,
-        no_lmhra: bool = True,
-        double_lmhra: bool = False,
-        # global block
-        return_list: List[int] = [8, 9, 10, 11],
-        n_layers: int = 4,
-        n_dim: int = 768,
-        n_head: int = 12,
-        mlp_factor: float = 4.0,
-        drop_path_rate: float = 0.,
-        mlp_dropout: List[float] = [0.5, 0.5, 0.5, 0.5],
-        # pretrain
-        clip_pretrained: bool = True,
-        pretrained: Optional[str] = None,
-        init_cfg: Optional[Union[Dict, List[Dict]]] = [
-            dict(type='TruncNormal', layer='Linear', std=0.02, bias=0.),
-            dict(type='Constant', layer='LayerNorm', val=1., bias=0.)
-        ]
+            self,
+            # backbone
+            input_resolution: int = 224,
+            patch_size: int = 16,
+            width: int = 768,
+            layers: int = 12,
+            heads: int = 12,
+            backbone_drop_path_rate: float = 0.,
+            t_size: int = 8,
+            kernel_size: int = 3,
+            dw_reduction: float = 1.5,
+            temporal_downsample: bool = False,
+            no_lmhra: bool = True,
+            double_lmhra: bool = False,
+            # global block
+            return_list: List[int] = [8, 9, 10, 11],
+            n_layers: int = 4,
+            n_dim: int = 768,
+            n_head: int = 12,
+            mlp_factor: float = 4.0,
+            drop_path_rate: float = 0.,
+            mlp_dropout: List[float] = [0.5, 0.5, 0.5, 0.5],
+            # pretrain
+            clip_pretrained: bool = True,
+            pretrained: Optional[str] = None,
+            frozen_stages: int = -1,
+            init_cfg: Optional[Union[Dict, List[Dict]]] = [
+                dict(type='TruncNormal', layer='Linear', std=0.02, bias=0.),
+                dict(type='Constant', layer='LayerNorm', val=1., bias=0.)
+            ]
+
     ) -> None:
         super().__init__(init_cfg=init_cfg)
+        self.frozen_stages = frozen_stages
 
+        # self.mona = Mona(in_dim=width, factor=8)
         self.pretrained = pretrained
         self.clip_pretrained = clip_pretrained
         self.input_resolution = input_resolution
@@ -499,10 +606,10 @@ class UniFormerV2(BaseModule):
                 (1, patch_size, patch_size), (0, 0, 0),
                 bias=False)
 
-        scale = width**-0.5
+        scale = width ** -0.5
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
         self.positional_embedding = nn.Parameter(scale * torch.randn(
-            (input_resolution // patch_size)**2 + 1, width))
+            (input_resolution // patch_size) ** 2 + 1, width))
         self.ln_pre = nn.LayerNorm(width)
 
         self.transformer = Transformer(
@@ -522,6 +629,35 @@ class UniFormerV2(BaseModule):
             drop_path_rate=drop_path_rate,
             mlp_dropout=mlp_dropout,
         )
+
+        self._freeze_stages()
+
+    def _freeze_stages(self) -> None:
+        """
+        根据 self.frozen_stages 冻结骨干网络前几层：
+        - >=0：冻结 conv1 和 ln_pre
+        - >=1：冻结 transformer.resblocks 中的前 frozen_stages 层
+        """
+        # 冻结 patch embed + ln_pre
+        if self.frozen_stages >= 0:
+            self.conv1.eval()
+            self.ln_pre.eval()
+            for param in self.conv1.parameters():
+                param.requires_grad = False
+            for param in self.ln_pre.parameters():
+                param.requires_grad = False
+
+        if self.frozen_stages >= 1:
+            for idx, block in enumerate(self.transformer.resblocks):
+                if idx < self.frozen_stages:
+                    block.eval()
+                    for name, param in block.named_parameters():
+                        if  'lora_' in name or 'Adapter' in name:
+                            continue
+                        param.requires_grad = False
+
+                else:
+                    break
 
     def _inflate_weight(self,
                         weight_2d: torch.Tensor,
@@ -588,10 +724,10 @@ class UniFormerV2(BaseModule):
             self.class_embedding.to(x.dtype) + torch.zeros(
                 x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x
         ],
-                      dim=1)  # shape = [*, grid ** 2 + 1, width]
+            dim=1)  # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
-        x = self.ln_pre(x)
-
+        x = self.ln_pre(x)  # 32,197,768
         x = x.permute(1, 0, 2)  # NLD -> LND
         out = self.transformer(x)
+
         return out
