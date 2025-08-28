@@ -19,3 +19,6 @@ We now provide the model weights in the following [link](https://download.openmm
 The model can be trained with the following command.<br>
 <code>export CUBLAS_WORKSPACE_CONFIG=":4096:8"</code><br>
 <code>CUDA_VISIBLE_DEVICES='0,1' bash tools/dist_test.sh configs/recognition/uniformerv2/uniformerv2-base-p16-res224_clip_8xb32-u8_kinetics400-rgb.py 2 --seed 220 --deterministic</code><br>
+## Acknowledgement
+This project is based on [MMAction2](https://github.com/open-mmlab/mmaction2). Thanks to the OpenMMLab team for their great work.
+
