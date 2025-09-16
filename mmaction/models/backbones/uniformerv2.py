@@ -44,23 +44,6 @@ from mmdet.models.backbones.swin import ShiftWindowMSA
 from mmcv.cnn import build_norm_layer
 from mmcv.cnn.bricks.transformer import FFN
 from mmengine.model import BaseModule
-class TokenreweightingAdapter(nn.Module):
-    def __init__(self, D):
-        super().__init__()
-        self.norm = nn.LayerNorm(D)
-        self.score = nn.Sequential(nn.Linear(D,D//2),nn.GELU(),nn.Linear(D//2,1))
-        self.out_proj = nn.Linear(D, D)
-        nn.init.constant_(self.out_proj.weight, 0)
-        nn.init.constant_(self.out_proj.bias, 0)
-
-    def forward(self, x):
-        # x: (BT, N, D)
-        normed = self.norm(x)
-        scores = self.score(normed)
-        weights = torch.sigmoid(scores)
-        out = self.out_proj(x*weights)
-        return out
-
 class Adapter(nn.Module):
     def __init__(self, D_features, mlp_ratio=0.25, act_layer=nn.GELU, skip_connect=True):
         super().__init__()
@@ -82,7 +65,7 @@ class Adapter(nn.Module):
         else:
             x = xs
         return x
-class SpatialRechannelAdapter(nn.Module):
+class TemporalAffectiveContextLearningAdapter(nn.Module):
     def __init__(self, D_features, mlp_ratio_init=0.25, act_layer=nn.GELU, skip_connect=True):
         super().__init__()
         self.skip_connect = skip_connect
@@ -219,8 +202,8 @@ class ResidualAttentionBlock(BaseModule):
         self.ln_2 = nn.LayerNorm(d_model)
 
         self.MLP_Adapter = Adapter(d_model,skip_connect=False)
-        self.S_Adapter = SpatialRechannelAdapter(d_model)
-        self.T_CrossAdapter=TokenreweightingAdapter(d_model)
+        self.S_Adapter = TemporalAffectiveContextLearningAdapter(d_model)
+        
     def attention(self, x: torch.Tensor) -> torch.Tensor:
 
 
@@ -242,16 +225,6 @@ class ResidualAttentionBlock(BaseModule):
                                           1).contiguous().view(L, NT, C)
             x = torch.cat([x[:1, :, :], tmp_x], dim=0)
         # MHSA
-
-        n, bt, d = x.shape
-
-        # ## temporal adaptation
-        xt = rearrange(x, 'n (b t) d -> t (b n) d', t=T)
-        xt_ln = self.ln_1(xt)
-        xt_attn = self.attention(xt_ln)
-        xt =self.T_CrossAdapter(xt_attn)
-        xt = rearrange(xt, 't (b n) d -> n (b t) d', n=n)
-        x = x + self.drop_path(xt)
         ## spatial adaptation
         attn_out = self.attention(self.ln_1(x))  # 原始 attention 输
         x = x + self.drop_path(self.S_Adapter(attn_out))  # 残差融合
